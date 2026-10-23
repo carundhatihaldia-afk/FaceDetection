@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Face Detection AI</title>
+
+  <!-- Face detection library -->
+  <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 20px;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #ffe1ef, #e7ddff);
+      font-family: Arial, sans-serif;
+      color: #352449;
+      text-align: center;
+    }
+
+    .app {
+      max-width: 520px;
+      margin: 10px auto;
+      padding: 22px;
+      background: white;
+      border-radius: 22px;
+      box-shadow: 0 8px 30px #8b72a533;
+    }
+
+    h1 {
+      color: #8b45bb;
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      color: #655a70;
+      line-height: 1.5;
+    }
+
+    .buttons {
+      margin-top: 20px;
+    }
+
+    button {
+      border: none;
+      border-radius: 12px;
+      padding: 13px 18px;
+      margin: 5px;
+      background: #9656cf;
+      color: white;
+      font-size: 15px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    button.stop {
+      background: #e65c83;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .camera {
+      position: relative;
+      width: 100%;
+      margin-top: 20px;
+      background: #20182a;
+      border-radius: 15px;
+      overflow: hidden;
+      min-height: 200px;
+    }
+
+    video {
+      display: block;
+      width: 100%;
+      height: auto;
+      transform: scaleX(-1);
+    }
+
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      transform: scaleX(-1);
+      pointer-events: none;
+    }
+
+    .status {
+      padding: 13px;
+      border-radius: 10px;
+      background: #f4eaff;
+      margin-top: 16px;
+      font-size: 14px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+
+    .count {
+      margin-top: 18px;
+      padding: 15px;
+      background: #f8efff;
+      border-radius: 14px;
+      font-size: 20px;
+      font-weight: bold;
+      color: #8b45bb;
+    }
+
+    .privacy {
+      font-size: 12px;
+      color: #655a70;
+      line-height: 1.6;
+      margin-top: 18px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <main class="app">
+
+    <h1>✨ Face Detection AI</h1>
+
+    <p class="subtitle">
+      Real-time face detection using your phone's camera.
+    </p>
+
+    <div class="buttons">
+      <button id="startBtn" disabled>
+        📷 Start Camera
+      </button>
+
+      <button id="stopBtn" class="stop" disabled>
+        ⏹ Stop Camera
+      </button>
+    </div>
+
+    <div class="camera">
+      <video
+        id="video"
+        autoplay
+        muted
+        playsinline>
+      </video>
+
+      <canvas id="overlay"></canvas>
+    </div>
+
+    <div class="status" id="status" role="status" aria-live="polite">
+      Loading face detection library...
+    </div>
+
+    <div class="count">
+      Faces Detected: <span id="faceCount">0</span>
+    </div>
+
+    <p class="privacy">
+      🔒 Privacy: Camera video is processed locally in this app.
+      This app does not upload your camera feed to a server.
+      Internet access is needed to download the detection library
+      and model.
+    </p>
+
+  </main>
+
+  <script>
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("overlay");
+    const ctx = canvas.getContext("2d");
+
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const statusBox = document.getElementById("status");
+    const faceCount = document.getElementById("faceCount");
+
+    let stream = null;
+    let detectionTimer = null;
+    let modelReady = false;
+    let busy = false;
+    let starting = false;
+
+    // Check whether browser camera access is supported.
+    function checkCameraSupport() {
+      if (!window.isSecureContext) {
+        statusBox.textContent =
+          "Camera access requires HTTPS or localhost. " +
+          "Open this app through a secure website in Chrome.";
+        return false;
+      }
+
+      if (!navigator.mediaDevices ||
+          !navigator.mediaDevices.getUserMedia) {
+        statusBox.textContent =
+          "Camera access is not supported in this preview. " +
+          "Try opening the app through HTTPS in Chrome.";
+        return false;
+      }
+
+      return true;
+    }
+
+    // Load the AI face detection model.
+    async function loadModel() {
+      try {
+        statusBox.textContent =
+          "Loading AI model. Please wait...";
+
+        await faceapi.nets.tinyFaceDetector.loadFromUri(
+          "https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/"
+        );
+
+        modelReady = true;
+
+        statusBox.textContent =
+          "AI model loaded successfully. Tap Start Camera.";
+
+        startBtn.disabled = false;
+
+      } catch (error) {
+        console.error("Model loading error:", error);
+
+        statusBox.textContent =
+          "Could not load the AI model. Check your internet " +
+          "connection and reload the app.";
+
+        startBtn.disabled = true;
+      }
+    }
+
+    // Ask the browser for permission and start the camera.
+    async function startCamera() {
+      if (starting || stream) {
+        return;
+      }
+
+      if (!modelReady) {
+        statusBox.textContent =
+          "Please wait until the AI model finishes loading.";
+        return;
+      }
+
+      if (!checkCameraSupport()) {
+        return;
+      }
+
+      starting = true;
+      startBtn.disabled = true;
+
+      try {
+        statusBox.textContent =
+          "Requesting camera permission. Tap Allow if prompted.";
+
+        // This triggers the browser camera permission request.
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: "user"
+          },
+          audio: false
+        });
+
+        video.srcObject = stream;
+
+        await video.play();
+
+        // Set canvas dimensions to match the camera video.
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        stopBtn.disabled = false;
+
+        statusBox.textContent =
+          "Camera started. Detecting faces...";
+
+        // Begin repeated face detection.
+        detectionTimer = setInterval(detectFaces, 350);
+
+      } catch (error) {
+        console.error("Camera error:", error);
+
+        if (error.name === "NotAllowedError" ||
+            error.name === "PermissionDeniedError") {
+
+          statusBox.textContent =
+            "Camera permission denied. Allow camera access " +
+            "in your browser or Android app settings, then retry.";
+
+        } else if (error.name === "NotFoundError") {
+
+          statusBox.textContent =
+            "No available camera was found on this device.";
+
+        } else if (error.name === "NotReadableError") {
+
+          statusBox.textContent =
+            "The camera may be in use by another app. " +
+            "Close other camera apps and try again.";
+
+        } else {
+
+          statusBox.textContent =
+            "Camera unavailable. Open the app through HTTPS " +
+            "in Chrome and check camera permissions.";
+        }
+
+        stopCamera(false);
+
+      } finally {
+        starting = false;
+        startBtn.disabled = !modelReady;
+      }
+    }
+
+    // Detect faces and draw green boxes.
+    async function detectFaces() {
+      if (busy || !stream || video.readyState < 2) {
+        return;
+      }
+
+      busy = true;
+
+      try {
+        const results = await faceapi.detectAllFaces(
+          video,
+          new faceapi.TinyFaceDetectorOptions({
+            inputSize: 224,
+            scoreThreshold: 0.5
+          })
+        );
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        results.forEach(result => {
+          const box = result.box;
+
+          ctx.strokeStyle = "#00ff88";
+          ctx.lineWidth = Math.max(3, canvas.width / 200);
+
+          ctx.strokeRect(
+            box.x,
+            box.y,
+            box.width,
+            box.height
+          );
+        });
+
+        faceCount.textContent = results.length;
+
+        if (results.length > 0) {
+          statusBox.textContent =
+            "✅ Face detection successful!";
+        } else {
+          statusBox.textContent =
+            "Looking for faces. Look toward the camera.";
+        }
+
+      } catch (error) {
+        console.error("Detection error:", error);
+
+        statusBox.textContent =
+          "Face detection encountered an error.";
+
+      } finally {
+        busy = false;
+      }
+    }
+
+    // Stop the camera and release its resources.
+    function stopCamera(updateStatus = true) {
+      if (detectionTimer !== null) {
+        clearInterval(detectionTimer);
+        detectionTimer = null;
+      }
+
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+      }
+
+      video.pause();
+      video.srcObject = null;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      faceCount.textContent = "0";
+      stopBtn.disabled = true;
+
+      startBtn.disabled = !modelReady;
+
+      if (updateStatus) {
+        statusBox.textContent = modelReady
+          ? "Camera stopped. Tap Start Camera to try again."
+          : "Loading AI model...";
+      }
+    }
+
+    // Connect the buttons.
+    startBtn.addEventListener("click", startCamera);
+
+    stopBtn.addEventListener("click", () => {
+      stopCamera();
+    });
+
+    // Release the camera when leaving the page.
+    window.addEventListener("pagehide", () => {
+      stopCamera(false);
+    });
+
+    // Initialise the app.
+    if (checkCameraSupport()) {
+      loadModel();
+    }
+
+  </script>
+
+</body>
+</html>
